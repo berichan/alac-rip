@@ -22,6 +22,9 @@ def stream_download_logs(pipe, target_list, check_lossless=False):
     """Thread target to read logs from download process and store them."""
     global download_running, download_process, last_detected_source_format, download_terminated_for_lossy
     
+    print(f"[STREAM_LOGS] Started with check_lossless={check_lossless}")
+    target_list.append(f"[DEBUG] Lossless-only mode: {check_lossless}")
+    
     try:
         for line in iter(pipe.readline, ''):
             line = line.strip()
@@ -36,6 +39,7 @@ def stream_download_logs(pipe, target_list, check_lossless=False):
                 if any(indicator in line_lower for indicator in ['downloading aac', 'aac-lc', 'using aac', 'fallback to aac', 'aac format', 'aac-only', 'unavailable, trying to dl aac-lc']):
                     last_detected_source_format = 'AAC'
                     print(f"[FORMAT DETECTION] Detected AAC source: {line}")
+                    print(f"[FORMAT DETECTION] check_lossless={check_lossless}, download_terminated_for_lossy={download_terminated_for_lossy}")
                     
                     # If lossless-only mode is enabled and we got AAC, hard kill the download
                     if check_lossless and not download_terminated_for_lossy:
@@ -43,21 +47,25 @@ def stream_download_logs(pipe, target_list, check_lossless=False):
                         download_terminated_for_lossy = True
                         target_list.append("⚠️ WARNING: Lossy source (AAC) detected - download terminated (lossless-only mode enabled)")
                         
-                        # Force-kill the download process
+                        # Force-kill the download process and its children
                         if download_process:
                             try:
-                                # Use os.kill for a hard termination
-                                import os
-                                import signal
-                                os.kill(download_process.pid, signal.SIGKILL)
-                                print(f"[KILL] Force-killed process PID {download_process.pid}")
-                                target_list.append("Process force-terminated.")
+                                print(f"[KILL] Attempting to kill process PID {download_process.pid}")
+                                # Use taskkill to kill the entire process tree on Windows
+                                result = subprocess.call(['taskkill', '/PID', str(download_process.pid), '/T', '/F'], 
+                                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                                print(f"[KILL] taskkill returned: {result}")
+                                print(f"[KILL] Force-killed process tree for PID {download_process.pid}")
+                                target_list.append("Process tree force-terminated.")
+                                download_running = False
                             except Exception as kill_error:
                                 print(f"[KILL ERROR] Failed to kill process: {kill_error}")
                                 try:
                                     # Fallback: try the normal kill method
+                                    print(f"[KILL] Trying fallback kill method")
                                     download_process.kill()
                                     print(f"[KILL] Fallback kill executed")
+                                    download_running = False
                                 except Exception as fallback_error:
                                     print(f"[KILL ERROR] Fallback also failed: {fallback_error}")
                                     target_list.append(f"Warning: Could not terminate process ({fallback_error})")
@@ -76,6 +84,7 @@ def stream_download_logs(pipe, target_list, check_lossless=False):
                     
     except Exception as e:
         target_list.append(f"Error reading download logs: {str(e)}")
+        print(f"[STREAM ERROR] {str(e)}")
     finally:
         # Check if process ended
         if download_process and download_process.poll() is not None:
