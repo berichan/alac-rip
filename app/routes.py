@@ -14,9 +14,13 @@ wrapper_needs_2fa = False
 download_process = None
 download_running = False
 
-def stream_download_logs(pipe, target_list):
+# Track source format to detect lossy sources
+last_detected_source_format = None  # 'ALAC', 'ATMOS', or 'AAC'
+download_terminated_for_lossy = False  # Flag to indicate if download was stopped due to lossy source
+
+def stream_download_logs(pipe, target_list, check_lossless=False):
     """Thread target to read logs from download process and store them."""
-    global download_running, download_process
+    global download_running, download_process, last_detected_source_format, download_terminated_for_lossy
     
     try:
         for line in iter(pipe.readline, ''):
@@ -24,6 +28,38 @@ def stream_download_logs(pipe, target_list):
             if line:
                 target_list.append(line)
                 print(f"[DOWNLOAD LOG] {line}")  # Debug print
+                
+                # Detect source format from logs
+                line_lower = line.lower()
+                
+                # Check for AAC/lossy indicators first (high priority for detection)
+                if any(indicator in line_lower for indicator in ['downloading aac', 'aac-lc', 'using aac', 'fallback to aac', 'aac format', 'aac-only', 'unavailable, trying to dl aac-lc']):
+                    last_detected_source_format = 'AAC'
+                    print(f"[FORMAT DETECTION] Detected AAC source: {line}")
+                    
+                    # If lossless-only mode is enabled and we got AAC, stop the download
+                    if check_lossless and not download_terminated_for_lossy:
+                        print(f"[LOSSLESS CHECK] Terminating download - lossy source detected (AAC)")
+                        download_terminated_for_lossy = True
+                        target_list.append("⚠️ WARNING: Lossy source (AAC) detected - download terminated (lossless-only mode enabled)")
+                        if download_process:
+                            download_process.terminate()
+                            try:
+                                download_process.wait(timeout=5)
+                            except subprocess.TimeoutExpired:
+                                download_process.kill()
+                
+                # Check for ATMOS indicators (lossless)
+                elif any(indicator in line_lower for indicator in ['atmos', 'dolby', 'spatial audio']):
+                    if last_detected_source_format != 'AAC':  # Don't override if AAC already detected
+                        last_detected_source_format = 'ATMOS'
+                        print(f"[FORMAT DETECTION] Detected ATMOS source: {line}")
+                
+                # Check for ALAC indicators (lossless)
+                elif any(indicator in line_lower for indicator in ['alac', 'lossless', 'hi-res']):
+                    if last_detected_source_format != 'AAC':  # Don't override if AAC already detected
+                        last_detected_source_format = 'ALAC'
+                        print(f"[FORMAT DETECTION] Detected ALAC source: {line}")
                     
     except Exception as e:
         target_list.append(f"Error reading download logs: {str(e)}")
@@ -31,7 +67,9 @@ def stream_download_logs(pipe, target_list):
         # Check if process ended
         if download_process and download_process.poll() is not None:
             exit_code = download_process.poll()
-            if exit_code == 0:
+            if download_terminated_for_lossy:
+                target_list.append("Download was terminated due to lossy source detection.")
+            elif exit_code == 0:
                 target_list.append("Download completed successfully.")
             else:
                 target_list.append(f"Download failed with exit code: {exit_code}")
@@ -253,7 +291,11 @@ def submit_2fa():
 
 @app.route("/download", methods=["POST"])
 def download():
-    global download_process, download_running, downloader_logs
+    global download_process, download_running, downloader_logs, last_detected_source_format, download_terminated_for_lossy
+    
+    # Reset source format and termination flag for new download
+    last_detected_source_format = None
+    download_terminated_for_lossy = False
     
     link = request.form.get("link")
     format_choice = request.form.get("format")
@@ -267,6 +309,16 @@ def download():
     
     if not link:
         return jsonify({"status": "error", "msg": "No URL provided"})
+    
+    # Read config to check if we should skip lossy sources
+    try:
+        script_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        config_path = os.path.join(script_dir, "apple-music-downloader", "config.yaml")
+        with open(config_path, 'r', encoding='utf-8') as f:
+            config = yaml.safe_load(f)
+        skip_if_lossy = config.get('download-skip-if-lossy-source', False)
+    except:
+        skip_if_lossy = False
     
     # Determine the command to run
     script_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -285,6 +337,9 @@ def download():
         cmd = ["go", "run", "main.go", link]
         downloader_logs.append(f"Starting standard download: {link}")
     
+    if skip_if_lossy:
+        downloader_logs.append("⚠️ Lossless-only mode enabled - will terminate if lossy source detected")
+    
     downloader_logs.append(f"Working directory: {amd_dir}")
     downloader_logs.append(f"Executing: {' '.join(cmd)}")
     
@@ -299,7 +354,7 @@ def download():
         )
         
         download_running = True
-        threading.Thread(target=stream_download_logs, args=(download_process.stdout, downloader_logs), daemon=True).start()
+        threading.Thread(target=stream_download_logs, args=(download_process.stdout, downloader_logs, skip_if_lossy), daemon=True).start()
         
         return jsonify({"status": "ok", "msg": "Download started successfully"})
         
@@ -377,7 +432,8 @@ def save_config():
             'embed-lrc', 'save-lrc-file', 'save-artist-cover', 'save-animated-artwork',
             'emby-animated-artwork', 'embed-cover', 'get-m3u8-from-device',
             'use-songinfo-for-playlist', 'dl-albumcover-for-playlist',
-            'convert-after-download', 'convert-keep-original', 'convert-skip-if-source-matches'
+            'convert-after-download', 'convert-keep-original', 'convert-skip-if-source-matches',
+            'download-skip-if-lossy-source'
         }
         
         # Define fields that are folder paths and need Windows to WSL translation

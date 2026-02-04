@@ -312,6 +312,27 @@
             </div>
         </div>
 
+        <!-- Download Quality Settings -->
+        <div class="settings-section">
+            <h4>🎼 Download Quality Settings</h4>
+            <div class="row">
+                <div class="col-md-12">
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" id="download-skip-if-lossy-source">
+                        <label class="form-check-label" for="download-skip-if-lossy-source">Skip Download if Lossy Source</label>
+                        <small class="text-muted d-block">Automatically cancel downloads that fall back to lossy sources (AAC)</small>
+                    </div>
+                </div>
+            </div>
+            <div class="row mt-3">
+                <div class="col-12">
+                    <div class="alert alert-warning" style="background-color: #332200; border-color: #664400; color: #ffcc99;">
+                        <small><strong>⚠️ Lossless-Only Mode:</strong> When enabled, if the downloader cannot get a lossless source (ALAC/ATMOS) and would fall back to AAC, the download will be automatically terminated. This ensures you only get lossless audio and prevents quality degradation.</small>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <!-- Conversion Settings -->
         <div class="settings-section">
             <h4>🔄 Conversion Settings</h4>
