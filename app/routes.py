@@ -37,17 +37,30 @@ def stream_download_logs(pipe, target_list, check_lossless=False):
                     last_detected_source_format = 'AAC'
                     print(f"[FORMAT DETECTION] Detected AAC source: {line}")
                     
-                    # If lossless-only mode is enabled and we got AAC, stop the download
+                    # If lossless-only mode is enabled and we got AAC, hard kill the download
                     if check_lossless and not download_terminated_for_lossy:
-                        print(f"[LOSSLESS CHECK] Terminating download - lossy source detected (AAC)")
+                        print(f"[LOSSLESS CHECK] Hard terminating download - lossy source detected (AAC)")
                         download_terminated_for_lossy = True
                         target_list.append("⚠️ WARNING: Lossy source (AAC) detected - download terminated (lossless-only mode enabled)")
+                        
+                        # Force-kill the download process
                         if download_process:
-                            download_process.terminate()
                             try:
-                                download_process.wait(timeout=5)
-                            except subprocess.TimeoutExpired:
-                                download_process.kill()
+                                # Use os.kill for a hard termination
+                                import os
+                                import signal
+                                os.kill(download_process.pid, signal.SIGKILL)
+                                print(f"[KILL] Force-killed process PID {download_process.pid}")
+                                target_list.append("Process force-terminated.")
+                            except Exception as kill_error:
+                                print(f"[KILL ERROR] Failed to kill process: {kill_error}")
+                                try:
+                                    # Fallback: try the normal kill method
+                                    download_process.kill()
+                                    print(f"[KILL] Fallback kill executed")
+                                except Exception as fallback_error:
+                                    print(f"[KILL ERROR] Fallback also failed: {fallback_error}")
+                                    target_list.append(f"Warning: Could not terminate process ({fallback_error})")
                 
                 # Check for ATMOS indicators (lossless)
                 elif any(indicator in line_lower for indicator in ['atmos', 'dolby', 'spatial audio']):
